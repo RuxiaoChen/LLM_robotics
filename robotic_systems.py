@@ -130,17 +130,13 @@ def OpenCom(port_name):
         return False
 
 # 发送数据函数
-def SendDatas(chStr):
-    global hCom, state
-    if hCom is not None and hCom.is_open:
-        try:
-            hCom.write(chStr)
-        except serial.SerialException as e:
-            print(f"发送数据错误: {e}")
-            state = 9  # 发送数据错误
-    else:
-        print("串口未打开，无法发送数据")
+def SendDatas(chStr,hCom1):
+    try:
+        hCom1.write(chStr)
+    except serial.SerialException as e:
+        print(f"发送数据错误: {e}")
         state = 9  # 发送数据错误
+
 
 # 关闭串口函数
 def StopCom():
@@ -192,7 +188,7 @@ def ResetArm():
     print("机械臂复位指令已发送。")
 
 # 实现 TForm1::Button8Click 的功能
-def Button8Click(ax1, ax2, ax3, ax5,ax6,pmw):
+def Button8Click(ax1, ax2, ax3, ax5,ax6,pmw, hCom):
     # # Step 1: 设置机械臂模式为模式0（垂直手腕结构）
     # mode_set_command = bytearray(48)
     # mode_set_command[0] = 251  # 帧头
@@ -217,8 +213,8 @@ def Button8Click(ax1, ax2, ax3, ax5,ax6,pmw):
     # ax4, ax5, ax6 = 0.0, 90.0, 150.0      # B0, B1, W 姿态角（单位：度）
     ax4=0.0
     # pmw = 1150                        # PWM 信号
-    at = 1500                          # 加速度
-    spd = 4500                           # 速度（单位：度/秒）
+    at = 150                          # 加速度
+    spd = 5500                           # 速度（单位：度/秒）
 
     # 将浮点数转换为字节数组并填充指令帧
     interpolation_command[3:7] = Float2Byte(ax1)  # X
@@ -229,6 +225,38 @@ def Button8Click(ax1, ax2, ax3, ax5,ax6,pmw):
     interpolation_command[23:27] = Float2Byte(ax6)  # W
     interpolation_command[27:31] = Float2Byte(pmw)  # PWM
     interpolation_command[39:43] = Float2Byte(at)  # 加速度
+    interpolation_command[43:47] = Float2Byte(spd)  # 速度
+    interpolation_command[47] = 239  # 帧尾
+
+    # 发送插补指令
+    print("发送直线插补运动指令...")
+    SendDatas(interpolation_command,hCom)
+    print("指令已发送完成。")
+
+def change_one_angle(choice, angle,pwm):
+
+    # Step 2: 准备直线插补指令数据
+    interpolation_command = bytearray(48)
+    interpolation_command[0] = 238  # 帧头
+    interpolation_command[1] = 5+48   # 插补指令（ASCII '3' + 48）
+    interpolation_command[2] = 5    # 子指令代码
+
+    # 填充直线插补指令数据字段
+    # ax1, ax2, ax3 = 334.0, 0.0, 417.5  # X, Y, Z 目标坐标（单位：mm）
+    # ax4, ax5, ax6 = 0.0, 90.0, 150.0      # B0, B1, W 姿态角（单位：度）
+    # ax4=0.0
+    # pmw = 1150                        # PWM 信号
+    spd = 5000/300                           # 速度（单位：度/秒）
+
+    # 将浮点数转换为字节数组并填充指令帧
+    interpolation_command[3:7] = Float2Byte(choice)  # X
+    interpolation_command[7:11] = Float2Byte(angle)  # Y
+    interpolation_command[11:15] = Float2Byte(0)  # Z
+    interpolation_command[15:19] = Float2Byte(0)  # B0
+    interpolation_command[19:23] = Float2Byte(0)  # B1
+    interpolation_command[23:27] = Float2Byte(0)  # W
+    interpolation_command[27:31] = Float2Byte(pwm)  # PWM
+    interpolation_command[39:43] = Float2Byte(0)  # 加速度
     interpolation_command[43:47] = Float2Byte(spd)  # 速度
     interpolation_command[47] = 239  # 帧尾
 
@@ -330,32 +358,36 @@ def set_change_angle(ax1, ax2, ax3, ax4, ax5,ax6,pmw):
     print("指令已发送完成。")
 
 
-# # 示例使用
+# # # 示例使用
 if __name__ == "__main__":
     available_ports = EnumSerial()
     print("可用的串口:")
     for port in available_ports:
         print(port)
-
+#
     # 打开串口（请根据实际情况修改端口名称）
-    if OpenCom("COM8"):
+    if OpenCom("COM7"):
         print("串口已打开")
         # ResetArm()
         time.sleep(0.5)
+        # change_one_angle(0,-10,2500)
         # 发送数据示例
-        change_angle(20.57,639.79,58.0,0.0,70.0, 140.0,1800)     # if>600, =654.36+1+x  ,x is ax2
+        change_angle(0,639.79,80.0,0.0,70.0, 140.0,1800)     # if>600, =654.36+1+x  ,x is ax2
         # for i in range(10):
         #     Button8Click(360.0, 0.0+i*10, 260.0+i*10, 60.0, 0.0, 2100)
         #     time.sleep(0.01)
-        Button8Click(360.0, 30.0, 300.0, 60.0, 0.0, 2100)
+        # Button8Click(455.0, 0.0, 250.0, 70.0, 0.0, 2500)
         # Button8Click(360.0, 0.0, 350.0, 60.0, 0.0, 2100)
-        time.sleep(1)
+        while True:
+            a0_old=a0
+            if a0-a0_old<0.001:
+                break
         # # 关闭串口
         # StopCom()
         # print("串口已关闭")
         if dx_get > 0:
             print(f"接收到数据: X={XP}, Y={YP}, Z={ZP}")
-            print(f"接收到数据: a0={a0}, a1={a1}, a2={a2},w0={w0},w1={w1},aw={aw}")
+            print(f"接收到数据: a1={a0}, a2={a1}, a3={a2},a4={w0},a5={w1},a6={aw}")
             dx_get = 0
             time.sleep(0.1)
         StopCom()

@@ -2,14 +2,12 @@ import pdb
 import warnings
 warnings.filterwarnings("ignore")
 import argparse
-import time
 import os
 import cv2
 import torch
 import numpy as np
 from collections import defaultdict, deque
 from robotic_systems import *
-import robotic_systems as rbot
 # 如果您还有其他用到的函数，需要从 utils 里引入
 from utils.utils import (non_max_suppression, scale_coords,
                          torch_utils, google_utils)
@@ -21,8 +19,25 @@ pixel_size = 50/178     # 像素尺寸 (mm/pixel)，需根据具体相机传感�
 scale_factor = 0.5    # 如果需要缩放图像做推理，请相应修改
 # 若推理时有缩放/resize操作，记得把检测框坐标再除以 scale_factor
 last_position=None
+last_box_size=None
 # 用于在一定时间窗口内对同一物体坐标进行平滑平均
 recent_positions = defaultdict(lambda: deque(maxlen=10))  # 每个类别存储最近10帧的坐标
+parser = argparse.ArgumentParser()
+parser.add_argument('--weights', type=str, default='hand_m.pt', help='model.pt path')
+parser.add_argument('--source', type=str, default='0', help='source (0 for webcam or path to video/image folder)')
+parser.add_argument('--output', type=str, default='./inference/output', help='output folder')
+parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
+parser.add_argument('--conf-thres', type=float, default=0.36, help='object confidence threshold')
+parser.add_argument('--iou-thres', type=float, default=0.55, help='IOU threshold for NMS')
+parser.add_argument('--fourcc', type=str, default='mp4v', help='output video codec (verify ffmpeg support)')
+parser.add_argument('--half', action='store_true', help='use FP16 half precision inference')
+parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+parser.add_argument('--view-img', action='store_true', help='display results')
+parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
+parser.add_argument('--classes', nargs='+', type=int, help='filter by class')
+parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
+parser.add_argument('--augment', action='store_true', help='augmented inference')
+opt = parser.parse_args()
 
 def letterbox(img, new_shape=640, color=(114, 114, 114), auto=True, scaleFill=False, scaleup=True):
     """
@@ -59,16 +74,16 @@ def letterbox(img, new_shape=640, color=(114, 114, 114), auto=True, scaleFill=Fa
 
 def convert_coordinates(corrd):
     x, y, z = corrd[0],corrd[1],corrd[2]
-    x_r = -4.604 * z + 838.765 - 30    # additional 30 according to actual test
-    y_r = 0.8 * x - 141.92799
-    z_r = -0.8 * y + 500
+    x_r = -4.204 * z + 990.765
+    y_r = 1.4 * x - 300.92799
+    z_r = -1.4 * y + 400
     x_r = max(270, min(x_r, 480))
     z_r = max(150, min(z_r, 480))
     return x_r, y_r, z_r
 
-def follow_hands(camera_coordinates,frame_count):
-    global last_position
-    if camera_coordinates[2] is not None:
+def follow_hands(camera_coordinates, box_size,hCom):
+    global last_position, last_box_size
+    if camera_coordinates is not None and camera_coordinates[2] is not None:
         x_r, y_r, z_r = convert_coordinates(camera_coordinates)
         x_buffer, y_buffer, z_buffer = deque(maxlen=5), deque(maxlen=5), deque(maxlen=5)
         x_buffer.append(x_r)
@@ -83,13 +98,21 @@ def follow_hands(camera_coordinates,frame_count):
         new_position = np.array([x_r, y_r, z_r])
         if last_position is None:
             last_position=new_position
+        if last_box_size is None:
+            last_box_size=box_size
         delta = np.linalg.norm(new_position - last_position)  # 欧几里得距离
-        threshold = 40  # 允许的坐标波动范围（单位：mm）
-        if delta > threshold:
+        delta_box = box_size-last_box_size
+        threshold = 20  # 允许的坐标波动范围（单位：mm）
+        if delta > threshold or delta_box>0.2:
             last_position=np.array([x_r,y_r,z_r])
-            Button8Click(x_r, y_r, z_r, 60.0, 0.0, 2500)
+            # pos1 = -44.4 * box_size + 88.8
+            # pos1 = max(0, min(pos1, 80))
+            pos1 = -1000 * box_size + 2800
+            pos1 = max(1100, min(pos1, 2500))
+            Button8Click(x_r, y_r, z_r, 30.0, 0.0, pos1,hCom)
 
-def detect(save_img=False):
+def detect(hCom, save_img=False):
+    global opt
     out, source, weights, half, view_img, save_txt, imgsz = \
         opt.output, opt.source, opt.weights, opt.half, opt.view_img, opt.save_txt, opt.img_size
 
@@ -133,15 +156,14 @@ def detect(save_img=False):
         action_flag=0
         frame_count = 0  # 初始化帧计数
         last_left_boxes, last_right_boxes = None, None  # 存储最近一次推理的结果
-        OpenCom("COM8")
+        # OpenCom(serial_nb)
+        box_size = 1
 
         while True:
             ret, frame = cap.read()
             if not ret:
                 print("No more frames or failed to read.")
                 break
-
-            h, w, c = frame.shape
 
             # 分割左右图像
             left_frame = frame[:, :1920]
@@ -159,7 +181,7 @@ def detect(save_img=False):
                 matched_pairs = match_left_right(last_left_boxes, last_right_boxes, model.names)
 
                 # 在左图像上绘制检测框和深度信息
-                camera_coordinates = draw_results(left_frame, matched_pairs, model.names)
+                camera_coordinates, box_size = draw_results(left_frame, matched_pairs, model.names)
 
             # 显示左右图像（根据需要调整显示尺寸）
             left_resized = cv2.resize(left_frame, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_AREA)
@@ -169,24 +191,23 @@ def detect(save_img=False):
             cv2.imshow("Left Image", left_resized)
             cv2.imshow("Right Image", right_resized)
 
-            # 退出条件
-            if cv2.waitKey(1) == ord('q'):
-                break
-
             # 更新帧计数
             frame_count += 1
-            if cv2.waitKey(1) == ord('a'):
+            # 退出条件
+            key = cv2.waitKey(1)  # 捕获按键事件
+            if key == ord('q'):
+                break
+            if key == ord('a'):
                 action_flag = 1
 
             if action_flag==1:
-                follow_hands(camera_coordinates, frame_count)
+                follow_hands(camera_coordinates, box_size,hCom)
 
         cap.release()
 
         cv2.destroyAllWindows()
-
+        StopCom()
         print(f"Done. ({time.time() - t0:.3f}s)")
-
 
 
 def run_inference(model, frame, device, imgsz, half):
@@ -284,12 +305,16 @@ def draw_results(left_frame, matched_pairs, class_names):
     在左图像上绘制检测框，并计算深度(Z)后写在图像上。
     同时对 (X, Y, Z) 进行一定的平滑。
     """
+    if not matched_pairs:  # 如果没有匹配对，直接返回空结果
+        return None, None
+
     for (left_obj, right_obj) in matched_pairs:
         left_cls, lx, ly, lconf, (x_min, y_min, x_max, y_max) = left_obj
         label = class_names[left_cls]
 
         # 画左目标框
         cv2.rectangle(left_frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+        box_ratio=(y_max-y_min)/(x_max-x_min)
 
         # 计算深度
         # 若右图像匹配成功，则用双目视差计算Z
@@ -340,34 +365,37 @@ def draw_results(left_frame, matched_pairs, class_names):
         if Z_avg is not None:
             text = f"{label}: {lconf:.2f}, X={X_avg:.1f}mm, Y={Y_avg:.1f}mm, Z={Z_avg:.1f}mm"
             coordinates=(X_avg,Y_avg,Z_avg)
+            print(text)
         else:
             text = f"{label}: {lconf:.2f}, X={X_avg:.1f}mm, Y={Y_avg:.1f}mm, Z=na"
+            print(text)
             coordinates = (X_avg, Y_avg, None)
 
         # 在图像上显示文本
         cv2.putText(left_frame, text, (x_min, y_min - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2, cv2.LINE_AA)
-        return coordinates
+        return coordinates, box_ratio
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', type=str, default='hand_m.pt', help='model.pt path')
-    parser.add_argument('--source', type=str, default='0', help='source (0 for webcam or path to video/image folder)')
-    parser.add_argument('--output', type=str, default='./inference/output', help='output folder')
-    parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
-    parser.add_argument('--conf-thres', type=float, default=0.36, help='object confidence threshold')
-    parser.add_argument('--iou-thres', type=float, default=0.55, help='IOU threshold for NMS')
-    parser.add_argument('--fourcc', type=str, default='mp4v', help='output video codec (verify ffmpeg support)')
-    parser.add_argument('--half', action='store_true', help='use FP16 half precision inference')
-    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
-    parser.add_argument('--view-img', action='store_true', help='display results')
-    parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
-    parser.add_argument('--classes', nargs='+', type=int, help='filter by class')
-    parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
-    parser.add_argument('--augment', action='store_true', help='augmented inference')
-    opt = parser.parse_args()
-    print(opt)
 
-    with torch.no_grad():
-        detect(save_img=True)
+# if __name__ == '__main__':
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument('--weights', type=str, default='hand_m.pt', help='model.pt path')
+#     parser.add_argument('--source', type=str, default='0', help='source (0 for webcam or path to video/image folder)')
+#     parser.add_argument('--output', type=str, default='./inference/output', help='output folder')
+#     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
+#     parser.add_argument('--conf-thres', type=float, default=0.36, help='object confidence threshold')
+#     parser.add_argument('--iou-thres', type=float, default=0.55, help='IOU threshold for NMS')
+#     parser.add_argument('--fourcc', type=str, default='mp4v', help='output video codec (verify ffmpeg support)')
+#     parser.add_argument('--half', action='store_true', help='use FP16 half precision inference')
+#     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+#     parser.add_argument('--view-img', action='store_true', help='display results')
+#     parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
+#     parser.add_argument('--classes', nargs='+', type=int, help='filter by class')
+#     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
+#     parser.add_argument('--augment', action='store_true', help='augmented inference')
+#     opt = parser.parse_args()
+#     print(opt)
+#
+#     with torch.no_grad():
+#         detect(save_img=True)
