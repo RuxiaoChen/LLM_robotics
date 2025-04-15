@@ -4,8 +4,6 @@ Ruxiao Chen, Guanlin Wu
 
 ### Problem 1
 
-a. ![P_1](/Users/wuguanlin/Desktop/JHU/2025 Spring/System Dynamics/Assignment/ASS_6/P_1.png)
-
 **Staff:**
 
 - Equation: `Training Completion Rate - Leaving Rate`
@@ -74,6 +72,23 @@ a. ![P_1](/Users/wuguanlin/Desktop/JHU/2025 Spring/System Dynamics/Assignment/AS
 
 b. Inertial control
 
-c. ![P_1_c](/Users/wuguanlin/Desktop/JHU/2025 Spring/System Dynamics/Assignment/ASS_6/P_1_c.png)
+c. 
 
-d. 
+d.
+
+At month 2, the Leaving Rate (gray) abruptly increases due to STEP(5, 2) and stays high, since it's exogenous.
+
+Staff (blue) drops immediately and sharply due to the increased outflow. Recovery is delayed due to recruitment and training lags, causing it to dip below target.
+
+Recruitment Rate (black) rises with delay, then overshoots and oscillates due to inertial control and feedback delay.
+
+Staff in Training (green) increases after recruitment, with additional delay and strong oscillations.
+
+Target Staff (red) remains constant as a baseline.
+
+Interactions:
+The shock causes Staff to fall → shortage triggers aggressive recruitment → delayed response causes overshoot and oscillations across variables.
+
+Equilibrium:
+The system shows damped oscillations and may stabilize, but not necessarily at the exact target level. The lack of internal feedback (Leaving Rate is exogenous) makes recovery slower and less stable than the endogenous case.
+
